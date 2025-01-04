@@ -60,7 +60,7 @@ apt-get install -y \
 
 # Python virtual environment erstellen
 log "Erstelle Python virtual environment..."
-python3 -m venv $PROJECT_DIR/venv
+python3 -m venv $PROJECT_DIR/venv --system-site-packages
 source $PROJECT_DIR/venv/bin/activate
 
 # Python-Pakete installieren
@@ -71,6 +71,7 @@ pip install RPi.GPIO
 pip install pygame
 pip install numpy
 pip install llama-cpp-python
+pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 # llama.cpp kompilieren
 log "Kompiliere llama.cpp..."
