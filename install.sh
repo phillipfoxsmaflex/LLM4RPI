@@ -9,7 +9,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-# Logging-Funktion
+# Logging-Funktionen
 log() {
     echo -e "${GREEN}[+] $1${NC}"
 }
@@ -34,9 +34,7 @@ log "Projektpfad: $PROJECT_DIR"
 
 # Erstelle Verzeichnisstruktur
 log "Erstelle Verzeichnisse..."
-mkdir -p $PROJECT_DIR/models
-mkdir -p $PROJECT_DIR/src
-mkdir -p $PROJECT_DIR/bin
+mkdir -p $PROJECT_DIR/{models,src,bin}
 
 # System-Pakete aktualisieren und installieren
 log "Aktualisiere System-Pakete..."
@@ -47,82 +45,124 @@ log "Installiere benötigte System-Pakete..."
 apt-get install -y \
     python3-pip \
     python3-venv \
+    python3-dev \
     espeak \
+    espeak-data \
+    python3-espeak \
+    portaudio19-dev \
     git \
     cmake \
     build-essential \
     gcc \
     g++ \
-    python3-dev \
     libopenblas-dev \
+    libasound2-dev \
     python3-rpi.gpio \
-    libasound2-dev
+    pigpio \
+    python3-pigpio
+
+# GPIO-Konfiguration
+log "Konfiguriere GPIO..."
+# Aktiviere Device Tree in config.txt falls nicht vorhanden
+if ! grep -q "^device_tree=1" /boot/config.txt; then
+    echo "device_tree=1" >> /boot/config.txt
+fi
+
+# Setze GPIO Einstellungen
+if ! grep -q "^dtparam=i2c_arm=on" /boot/config.txt; then
+    echo "dtparam=i2c_arm=on" >> /boot/config.txt
+fi
+if ! grep -q "^dtparam=spi=on" /boot/config.txt; then
+    echo "dtparam=spi=on" >> /boot/config.txt
+fi
+if ! grep -q "^dtparam=gpio=on" /boot/config.txt; then
+    echo "dtparam=gpio=on" >> /boot/config.txt
+fi
+
+# Erstelle udev-Regeln
+log "Erstelle udev-Regeln..."
+cat > /etc/udev/rules.d/99-gpio.rules << EOL
+SUBSYSTEM=="bcm2835-gpiomem", KERNEL=="gpiomem", GROUP="gpio", MODE="0660"
+SUBSYSTEM=="gpio*", KERNEL=="gpiochip*", GROUP="gpio", MODE="0660"
+SUBSYSTEM=="gpio", GROUP="gpio", MODE="0660"
+EOL
 
 # Python virtual environment erstellen
 log "Erstelle Python virtual environment..."
-python3 -m venv $PROJECT_DIR/venv --system-site-packages
+python3 -m venv $PROJECT_DIR/venv
 source $PROJECT_DIR/venv/bin/activate
 
 # Python-Pakete installieren
 log "Installiere Python-Pakete..."
 pip install --upgrade pip
 pip install wheel
+
+# Installiere PyTorch
+log "Installiere PyTorch..."
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Installiere weitere Python-Pakete
+pip install gpiozero
 pip install RPi.GPIO
+pip install pigpio
 pip install pygame
 pip install numpy
 pip install llama-cpp-python
-pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install py-espeak-ng
+pip install sentencepiece
 
-# llama.cpp kompilieren
-log "Kompiliere llama.cpp..."
+# Aktiviere pigpiod Service
+log "Aktiviere pigpiod Service..."
+systemctl enable pigpiod
+systemctl start pigpiod
+
+# Klon und Build llama.cpp mit CMake
+log "Klone llama.cpp..."
 cd $PROJECT_DIR
-git clone https://github.com/ggerganov/llama.cpp
+if [ -d "llama.cpp" ]; then
+    rm -rf llama.cpp
+fi
+
+git clone https://github.com/ggerganov/llama.cpp.git
 cd llama.cpp
-make -j4
-cp main $PROJECT_DIR/bin/
+
+# Füge das Repository zur safe.directory hinzu
+git config --global --add safe.directory "$PROJECT_DIR/llama.cpp"
+
+log "Erstelle Build-Verzeichnis..."
+mkdir -p build
+cd build
+
+log "Konfiguriere CMake..."
+cmake ..
+
+log "Kompiliere llama.cpp..."
+cmake --build . --config Release
+
 cd $PROJECT_DIR
 
-# Lade Modelle herunter
-log "Lade Modelle herunter..."
-
-# Phi-2 Modell
-log "Lade Phi-2 Modell..."
-cd $PROJECT_DIR/models
-git clone https://huggingface.co/microsoft/phi-2
-cd phi-2
-
-# Konvertiere zu GGUF
-log "Konvertiere Phi-2 zu GGUF Format..."
-python3 $PROJECT_DIR/llama.cpp/convert.py .
-$PROJECT_DIR/llama.cpp/quantize phi-2.gguf phi-2-q4_k_m.gguf q4_k_m
-cd $PROJECT_DIR
-
-# GPIO-Konfiguration
-log "Konfiguriere GPIO..."
-# Aktiviere SPI und I2C wenn nötig
-raspi-config nonint do_spi 0
-raspi-config nonint do_i2c 0
-
-# Erstelle GPIO-Udev-Regel für Nicht-Root-Zugriff
-cat > /etc/udev/rules.d/20-gpiomem.rules << EOL
-SUBSYSTEM=="bcm2835-gpiomem", KERNEL=="gpiomem", GROUP="gpio", MODE="0660"
-EOL
-
-# Füge Benutzer zur GPIO-Gruppe hinzu
-usermod -a -G gpio pi
-
-# Kopiere den Assistenten-Code
-log "Kopiere Assistenten-Code..."
+# Kopiere den LLM4RPI Python-Code
+log "Erstelle Python-Code..."
 cat > $PROJECT_DIR/src/llm4rpi.py << 'EOL'
-# Hier kommt der Code aus dem vorherigen Artifact
+# Hier kommt der komplette Python-Code
+# Den Code separat bereitstellen oder aus einer Datei kopieren
 EOL
 
 # Erstelle Startup-Script
 log "Erstelle Startup-Script..."
 cat > $PROJECT_DIR/start_llm4rpi.sh << EOL
 #!/bin/bash
-source $PROJECT_DIR/venv/bin/activate
-python3 $PROJECT_DIR/src/llm4rpi.py
+# Hole den absoluten Pfad des Skript-Verzeichnisses
+SCRIPT_DIR="$PROJECT_DIR"
+
+# Aktiviere die virtuelle Umgebung
+source "\$SCRIPT_DIR/venv/bin/activate"
+
+# Setze den PYTHONPATH
+export PYTHONPATH="\$SCRIPT_DIR:\$PYTHONPATH"
+
+# Führe das Python-Skript aus
+python3 "\$SCRIPT_DIR/src/llm4rpi.py"
 EOL
 
 chmod +x $PROJECT_DIR/start_llm4rpi.sh
@@ -132,13 +172,14 @@ log "Erstelle Systemd Service..."
 cat > /etc/systemd/system/llm4rpi.service << EOL
 [Unit]
 Description=LLM4RPI Voice Assistant
-After=network.target
+After=network.target pigpiod.service
 
 [Service]
 Type=simple
 User=pi
 Group=gpio
 WorkingDirectory=$PROJECT_DIR
+Environment=PYTHONPATH=$PROJECT_DIR
 ExecStart=$PROJECT_DIR/start_llm4rpi.sh
 Restart=always
 RestartSec=3
@@ -152,20 +193,12 @@ log "Setze Berechtigungen..."
 chown -R pi:pi $PROJECT_DIR
 chmod -R 755 $PROJECT_DIR
 
-# Aktiviere und starte den Service
-log "Aktiviere Systemd Service..."
-systemctl daemon-reload
-systemctl enable llm4rpi
-systemctl start llm4rpi
-
-# Erstelle README.md
+# Erstelle README
+log "Erstelle README..."
 cat > $PROJECT_DIR/README.md << EOL
 # LLM4RPI
 
 Ein lokaler Sprachassistent für den Raspberry Pi mit KY-038 Soundsensor.
-
-## Installation
-Die Installation wurde bereits durch das Installationsskript durchgeführt.
 
 ## Hardware-Setup
 KY-038 Verkabelung:
@@ -186,12 +219,16 @@ Logs können mit folgendem Befehl eingesehen werden:
 \`sudo journalctl -u llm4rpi\`
 EOL
 
+# Aktiviere und starte den Service
+log "Aktiviere Systemd Service..."
+systemctl daemon-reload
+systemctl enable llm4rpi
+
 # Cleanup
 log "Räume auf..."
 apt-get autoremove -y
 apt-get clean
 
-# Ausgabe der Verkabelungsanleitung
 log "Installation von LLM4RPI abgeschlossen!"
 echo ""
 warning "KY-038 Verkabelung:"
