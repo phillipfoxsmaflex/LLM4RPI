@@ -89,7 +89,7 @@ EOL
 
 # Python virtual environment erstellen
 log "Erstelle Python virtual environment..."
-python3 -m venv $PROJECT_DIR/venv
+python3 -m venv $PROJECT_DIR/venv --system-site-packages 
 source $PROJECT_DIR/venv/bin/activate
 
 # Python-Pakete installieren
